@@ -8,7 +8,7 @@ from functools import wraps
 
 app = Flask(__name__)
 
-app.config['SECRET_KEY'] = 'd6yw372%ylWK$u'
+app.config['SECRET_KEY'] = 'd6yw372%ylWK$u' #In production: use environment variables or a separate config file
 client = MongoClient("mongodb://localhost:27017")
 db = client["photo_reminder"]
 users_collection = db["users"]
@@ -19,20 +19,20 @@ def register():
     if not data:
         return jsonify({"message": "No JSON received"}), 400
 
-    email = data.get('email')
+    username = data.get('username')
     password = data.get('password')
 
-    if not email or not password:
-        return jsonify({"message": "Email and password are required"}), 400
+    if not username or not password:
+        return jsonify({"message": "Username and password are required"}), 400
     
-    existing_user = users_collection.find_one({"email": email})
+    existing_user = users_collection.find_one({"username": username})
     if existing_user:
         return jsonify({"message": "User already exist"}), 400
 
     hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
 
     user_doc = {
-        "email": email,
+        "username": username,
         "password": hashed_password,
         "created_at": datetime.datetime.now(datetime.timezone.utc)
     }
@@ -47,20 +47,20 @@ def login():
     if not data:
         return jsonify({"message": "No JSON received"}), 400
 
-    email = data.get('email')
+    username = data.get('username')
     password = data.get('password')
 
-    if not email or not password:
-        return jsonify({"message": "Email and password are required"}), 400
+    if not username or not password:
+        return jsonify({"message": "Username and password are required"}), 400
     
-    user = users_collection.find_one({"email": email})
+    user = users_collection.find_one({"username": username})
     if not user:
         return jsonify({"message": "Invalid email or password"}), 401
     
     if bcrypt.checkpw(password.encode('utf-8'), user['password']):
         token = jwt.encode(
             {
-                "email": email,
+                "username": username,
                 "exp": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=30)
             },
             app.config['SECRET_KEY'],
@@ -71,7 +71,7 @@ def login():
         return jsonify({"token": token_str}), 200
     
     else:
-        return jsonify({"message": "Invalid email or password"}), 401
+        return jsonify({"message": "Invalid username or password"}), 401
 
    
 @app.route("/")

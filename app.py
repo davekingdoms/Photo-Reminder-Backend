@@ -52,10 +52,10 @@ def login():
 
     if not username or not password:
         return jsonify({"message": "Username and password are required"}), 400
-    
+
     user = users_collection.find_one({"username": username})
     if not user:
-        return jsonify({"message": "Invalid email or password"}), 401
+        return jsonify({"message": "Invalid username or password"}), 401
     
     if bcrypt.checkpw(password.encode('utf-8'), user['password']):
         token = jwt.encode(

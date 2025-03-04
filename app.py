@@ -13,7 +13,7 @@ client = MongoClient("mongodb://localhost:27017")
 db = client["photo_reminder"]
 users_collection = db["users"]
 
-@app.route('/register', methods = ['POST'])
+@app.route('/register', methods=['POST'])
 def register():
     data = request.get_json()
     if not data:
@@ -29,18 +29,33 @@ def register():
     if existing_user:
         return jsonify({"message": "User already exist"}), 400
 
+    # Hash password
     hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
 
+    # Inserisci nuovo utente
     user_doc = {
         "username": username,
         "password": hashed_password,
         "created_at": datetime.datetime.now(datetime.timezone.utc)
     }
-
     users_collection.insert_one(user_doc)
 
-    return jsonify({"message": "User registered successfully"}), 201
+    # Genera token JWT come in /login
+    token = jwt.encode(
+        {
+            "username": username,
+            "exp": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=30)
+        },
+        app.config['SECRET_KEY'],
+        algorithm = "HS256"
+    )
+    token_str = token if isinstance(token, str) else token.decode('utf-8')
 
+    return jsonify({
+        "message": "User registered successfully",
+        "token": token_str
+    }), 201
+    
 @app.route('/login', methods=['POST'])
 def login():
     data = request.get_json()

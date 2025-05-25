@@ -1,97 +1,34 @@
-from flask import Flask, request, jsonify
+from flask import Flask
 from pymongo import MongoClient
-import bcrypt
-import jwt
-import datetime
-import string
-from functools import wraps
 
+# ------------------------------------------------------------------ #
+# App & DB initialisation
+# ------------------------------------------------------------------ #
 app = Flask(__name__)
+app.config["SECRET_KEY"] = "d6yw372%ylWK$u"          # ⚠️ use an env-var in prod
 
-app.config['SECRET_KEY'] = 'd6yw372%ylWK$u' #In production: use environment variables or a separate config file
 client = MongoClient("mongodb://localhost:27017")
 db = client["photo_reminder"]
-users_collection = db["users"]
+# Store the collections inside app.config so blueprints can access them
+app.config["USERS_COLL"] = db["users"]
+app.config["MARKERS_COLL"] = db["markers"] # Nuova collezione per i marker
 
-@app.route('/register', methods=['POST'])
-def register():
-    data = request.get_json()
-    if not data:
-        return jsonify({"message": "No JSON received"}), 400
+# ------------------------------------------------------------------ #
+# Register blueprints
+# ------------------------------------------------------------------ #
+from auth import auth_bp          # importiamo auth.py
+from markers import markers_bp    # importiamo il nuovo file markers.py
 
-    username = data.get('username')
-    password = data.get('password')
+app.register_blueprint(auth_bp)   # Registriamo il blueprint auth
+app.register_blueprint(markers_bp) # Registriamo il blueprint markers
 
-    if not username or not password:
-        return jsonify({"message": "Username and password are required"}), 400
-    
-    existing_user = users_collection.find_one({"username": username})
-    if existing_user:
-        return jsonify({"message": "User already exist"}), 400
-
-    # Hash password
-    hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
-
-    # Inserisci nuovo utente
-    user_doc = {
-        "username": username,
-        "password": hashed_password,
-        "created_at": datetime.datetime.now(datetime.timezone.utc)
-    }
-    users_collection.insert_one(user_doc)
-
-    # Genera token JWT come in /login
-    token = jwt.encode(
-        {
-            "username": username,
-            "exp": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=30)
-        },
-        app.config['SECRET_KEY'],
-        algorithm = "HS256"
-    )
-    token_str = token if isinstance(token, str) else token.decode('utf-8')
-
-    return jsonify({
-        "message": "User registered successfully",
-        "token": token_str
-    }), 201
-    
-@app.route('/login', methods=['POST'])
-def login():
-    data = request.get_json()
-    if not data:
-        return jsonify({"message": "No JSON received"}), 400
-
-    username = data.get('username')
-    password = data.get('password')
-
-    if not username or not password:
-        return jsonify({"message": "Username and password are required"}), 400
-
-    user = users_collection.find_one({"username": username})
-    if not user:
-        return jsonify({"message": "Invalid username or password"}), 401
-    
-    if bcrypt.checkpw(password.encode('utf-8'), user['password']):
-        token = jwt.encode(
-            {
-                "username": username,
-                "exp": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=30)
-            },
-            app.config['SECRET_KEY'],
-            algorithm = "HS256"
-        )
-
-        token_str = token if isinstance(token, str) else token.decode('utf-8')
-        return jsonify({"token": token_str}), 200
-    
-    else:
-        return jsonify({"message": "Invalid username or password"}), 401
-
-   
+# ------------------------------------------------------------------ #
+# Simple health check
+# ------------------------------------------------------------------ #
 @app.route("/")
 def home():
     return "Server Flask attivo!"
 
-if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+# ------------------------------------------------------------------ #
+if __name__ == "__main__":
+    app.run(debug=True, host="0.0.0.0", port=5000)

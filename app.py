@@ -20,7 +20,7 @@ from auth import auth_bp          # importiamo auth.py
 from markers import markers_bp    # importiamo il nuovo file markers.py
 
 app.register_blueprint(auth_bp)   # Registriamo il blueprint auth
-app.register_blueprint(markers_bp) # Registriamo il blueprint markers
+app.register_blueprint(markers_bp, url_prefix="/markers")
 
 # ------------------------------------------------------------------ #
 # Simple health check

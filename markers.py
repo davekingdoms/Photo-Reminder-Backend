@@ -1,10 +1,27 @@
 import datetime as dt
+from functools import wraps
+
 import jwt
 from bson import ObjectId
-from functools import wraps
-from flask import Blueprint, request, jsonify, current_app
+from flask import Blueprint, current_app, jsonify, request
+from pymongo import ASCENDING
 
 markers_bp = Blueprint("markers", __name__)
+
+# ────────────────────────────────────────────────────────────
+# Init: crea (una volta) l’indice TTL per i soft-delete
+# ────────────────────────────────────────────────────────────
+def _markers():
+    return current_app.config["MARKERS_COLL"]
+
+def ensure_ttl_index():
+
+    _markers().create_index(
+        [("deleted_at", ASCENDING)],         
+        name="deleted_ttl_1day",
+        expireAfterSeconds=60 * 60 * 24 * 15,    
+        partialFilterExpression={"deleted": True},
+    )
 
 # ────────────────────────────────────────────────────────────
 # JWT decorator
@@ -34,13 +51,6 @@ def jwt_required(fn):
     return wrapper
 
 
-def _markers():
-    return current_app.config["MARKERS_COLL"]
-
-
-# ────────────────────────────────────────────────────────────
-# Helpers di serializzazione
-# ────────────────────────────────────────────────────────────
 def _millis(value):
     """datetime → epoch-millis"""
     if isinstance(value, dt.datetime):
@@ -49,13 +59,7 @@ def _millis(value):
 
 
 def _to_client(doc: dict) -> dict:
-    """
-    Converte un documento MongoDB nel JSON atteso dall’app:
-    * _id            → stringa
-    * username       → invariato
-    * snake_case     → camelCase
-    * datetime       → epoch-millis
-    """
+    """Mappa un documento MongoDB nel payload per l’app"""
     return {
         "_id": str(doc["_id"]),
         "username": doc["username"],
@@ -76,14 +80,12 @@ def _to_client(doc: dict) -> dict:
         "deleted": doc.get("deleted", False),
     }
 
-
 # ────────────────────────────────────────────────────────────
-# CRUD endpoints
+# Routes
 # ────────────────────────────────────────────────────────────
 @markers_bp.get("/", strict_slashes=False)
 @jwt_required
 def list_markers():
-    """Ritorna tutti i marker dell’utente modificati dopo updatedSince."""
     q = {"username": request.username}
 
     if (since := request.args.get("updatedSince")) is not None:
@@ -116,7 +118,7 @@ def create_marker():
     now = dt.datetime.now(dt.timezone.utc)
     marker = {
         "_id": ObjectId(data.get("id")) if data.get("id") else ObjectId(),
-        "username": request.username,  # ← l’owner è quello del token
+        "username": request.username,
         "lat": lat,
         "lng": lng,
         "title": data["title"],
@@ -143,32 +145,37 @@ def update_marker(marker_id):
     data = request.get_json(silent=True) or {}
     now = dt.datetime.now(dt.timezone.utc)
 
-    # Validazione angle se presente
     if "angle" in data:
         try:
             data["angle"] = float(data["angle"])
         except (ValueError, TypeError):
             return jsonify({"message": "angle must be a number"}), 400
 
-    data["updated_at"] = now  # sempre aggiornare timestamp
+    data["updated_at"] = now
 
-    res = _markers().update_one(
+    res = _markers().find_one_and_update(
         {"_id": ObjectId(marker_id), "username": request.username},
         {"$set": data},
+        return_document=True,          # restituisce il doc aggiornato
     )
-    if res.matched_count == 0:
+    if not res:
         return jsonify({"message": "marker not found"}), 404
-    return jsonify({"message": "updated"}), 200
+    return jsonify({"marker": _to_client(res)}), 200   # wrapper coerente
 
 
 @markers_bp.delete("/<marker_id>", strict_slashes=False)
 @jwt_required
 def delete_marker(marker_id):
     now = dt.datetime.now(dt.timezone.utc)
-    res = _markers().update_one(
+    res = _markers().find_one_and_update(
         {"_id": ObjectId(marker_id), "username": request.username},
-        {"$set": {"deleted": True, "updated_at": now}},
+        {"$set": {
+            "deleted": True,
+            "deleted_at": now,          # necessario per TTL
+            "updated_at": now
+        }},
+        return_document=True,
     )
-    if res.matched_count == 0:
+    if not res:
         return jsonify({"message": "marker not found"}), 404
-    return jsonify({"message": "deleted"}), 200
+    return jsonify({"marker": _to_client(res)}), 200

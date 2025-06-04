@@ -3,7 +3,6 @@ from flask import Blueprint, request, jsonify, current_app
 
 auth_bp = Blueprint("auth", __name__)
 
-# ─────────────────────────── helpers ────────────────────────────
 def _users():
     """Restituisce la collection MongoDB degli utenti"""
     return current_app.config["USERS_COLL"]
@@ -24,11 +23,10 @@ def _jwt_for(username: str) -> str:
         current_app.config["SECRET_KEY"],
         algorithm="HS256",
     )
-    # PyJWT ≥2 restituisce già str; fallback per versioni più vecchie
+ 
     return token if isinstance(token, str) else token.decode("utf-8")
 
 
-# ─────────────────────────── routes ─────────────────────────────
 @auth_bp.post("/register")
 def register():
     data = request.get_json(silent=True) or {}
@@ -73,6 +71,6 @@ def login():
     return jsonify(
         {
             "token":    _jwt_for(username),
-            "username": username,              # campo opzionale, utile lato client
+            "username": username,     
         }
     ), 200

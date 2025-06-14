@@ -1,3 +1,4 @@
+#app.py
 from flask import Flask
 from pymongo import MongoClient
 
@@ -10,12 +11,15 @@ db = client["photo_reminder"]
 
 app.config["USERS_COLL"] = db["users"]
 app.config["MARKERS_COLL"] = db["markers"]
+app.config["DB"] = db
 
 from auth import auth_bp         
 from markers import markers_bp, ensure_ttl_index   
+from photos import photos_bp
 
 app.register_blueprint(auth_bp)  
 app.register_blueprint(markers_bp, url_prefix="/markers")
+app.register_blueprint(photos_bp) 
 
 with app.app_context():
     ensure_ttl_index()

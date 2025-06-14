@@ -2,30 +2,37 @@ import datetime as dt
 from functools import wraps
 
 import jwt
+import gridfs
 from bson import ObjectId
 from flask import Blueprint, current_app, jsonify, request
 from pymongo import ASCENDING
 
 markers_bp = Blueprint("markers", __name__)
 
-# ────────────────────────────────────────────────────────────
-# Init: crea (una volta) l’indice TTL per i soft-delete
-# ────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────
+# Helpers Mongo / GridFS
+# ───────────────────────────────────────────────────────────
 def _markers():
     return current_app.config["MARKERS_COLL"]
 
-def ensure_ttl_index():
+def _fs():
+    """Handle GridFS (collezione photos_fs)."""
+    return gridfs.GridFS(current_app.config["DB"], collection="photos_fs")
 
+# ───────────────────────────────────────────────────────────
+# TTL index (soft-delete 15 giorni)
+# ───────────────────────────────────────────────────────────
+def ensure_ttl_index():
     _markers().create_index(
-        [("deleted_at", ASCENDING)],         
-        name="deleted_ttl_1day",
-        expireAfterSeconds=60 * 60 * 24 * 15,    
+        [("deleted_at", ASCENDING)],
+        name="deleted_ttl_15days",
+        expireAfterSeconds=60 * 60 * 24 * 15,
         partialFilterExpression={"deleted": True},
     )
 
-# ────────────────────────────────────────────────────────────
-# JWT decorator
-# ────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────
+# JWT decorator (ri-usato anche da photos.py)
+# ───────────────────────────────────────────────────────────
 def jwt_required(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
@@ -50,39 +57,37 @@ def jwt_required(fn):
 
     return wrapper
 
-
+# ───────────────────────────────────────────────────────────
+# Utils mapping
+# ───────────────────────────────────────────────────────────
 def _millis(value):
-    """datetime → epoch-millis"""
-    if isinstance(value, dt.datetime):
-        return int(value.timestamp() * 1000)
-    return value or 0
-
+    return int(value.timestamp() * 1000) if isinstance(value, dt.datetime) else 0
 
 def _to_client(doc: dict) -> dict:
-    """Mappa un documento MongoDB nel payload per l’app"""
+    """Trasforma documento Mongo → payload per l’app mobile."""
     return {
-        "_id": str(doc["_id"]),
-        "username": doc["username"],
-        "lat": doc["lat"],
-        "lng": doc["lng"],
-        "title": doc["title"],
-        "genre": doc.get("genre"),
-        "shutterSpeed": doc.get("shutterSpeed") or (doc.get("settings") or {}).get("shutterSpeed"),
-        "aperture": doc.get("aperture") or (doc.get("settings") or {}).get("aperture"),
-        "iso": doc.get("iso") or (doc.get("settings") or {}).get("iso"),
-        "focalLength": doc.get("focalLength") or (doc.get("settings") or {}).get("focalLength"),
-        "tag": doc.get("tag") or (doc.get("tags") or [None])[0],
-        "notes": doc.get("notes"),
-        "photoUrl": doc.get("photoUrl"),
-        "angle": float(doc.get("angle", 0.0)),
+        "_id":       str(doc["_id"]),
+        "username":  doc["username"],
+        "lat":       doc["lat"],
+        "lng":       doc["lng"],
+        "title":     doc["title"],
+        "genre":     doc.get("genre"),
+        "shutterSpeed": doc.get("shutterSpeed"),
+        "aperture":  doc.get("aperture"),
+        "iso":       doc.get("iso"),
+        "focalLength": doc.get("focalLength"),
+        "tag":       doc.get("tag"),
+        "notes":     doc.get("notes"),
+        "photoIds":  [str(pid) for pid in doc.get("photoIds", [])],  # ← nuovo
+        "angle":     float(doc.get("angle", 0.0)),
         "createdAt": _millis(doc.get("created_at")),
         "updatedAt": _millis(doc.get("updated_at")),
-        "deleted": doc.get("deleted", False),
+        "deleted":   doc.get("deleted", False),
     }
 
-# ────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────
 # Routes
-# ────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────
 @markers_bp.get("/", strict_slashes=False)
 @jwt_required
 def list_markers():
@@ -129,7 +134,7 @@ def create_marker():
         "focalLength": data.get("focalLength"),
         "tag": data.get("tag"),
         "notes": data.get("notes"),
-        "photoUrl": data.get("photoUrl"),
+        "photoIds": [],                        # ← array vuoto di default
         "angle": float(data.get("angle", 0.0)),
         "created_at": now,
         "updated_at": now,
@@ -156,11 +161,11 @@ def update_marker(marker_id):
     res = _markers().find_one_and_update(
         {"_id": ObjectId(marker_id), "username": request.username},
         {"$set": data},
-        return_document=True,          # restituisce il doc aggiornato
+        return_document=True,
     )
     if not res:
         return jsonify({"message": "marker not found"}), 404
-    return jsonify({"marker": _to_client(res)}), 200   # wrapper coerente
+    return jsonify({"marker": _to_client(res)}), 200
 
 
 @markers_bp.delete("/<marker_id>", strict_slashes=False)
@@ -171,11 +176,21 @@ def delete_marker(marker_id):
         {"_id": ObjectId(marker_id), "username": request.username},
         {"$set": {
             "deleted": True,
-            "deleted_at": now,          # necessario per TTL
+            "deleted_at": now,     # necessario per TTL
             "updated_at": now
         }},
         return_document=True,
     )
     if not res:
         return jsonify({"message": "marker not found"}), 404
+
+    # ── elimina in cascata le immagini collegate (se presenti) ──
+    if res.get("photoIds"):
+        fs = _fs()
+        for pid in res["photoIds"]:
+            try:
+                fs.delete(pid)
+            except gridfs.NoFile:
+                pass
+
     return jsonify({"marker": _to_client(res)}), 200

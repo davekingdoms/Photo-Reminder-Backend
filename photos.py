@@ -7,18 +7,21 @@ GET   /photos/<photo_id>                              →  stream immagine
 """
 import datetime as dt
 import io
-from bson import ObjectId
+
 import gridfs
+from bson import ObjectId
+from bson.errors import InvalidId
 from flask import Blueprint, current_app, request, send_file, jsonify
 
-from markers import jwt_required     # ri-usa il decorator già definito
+from markers import jwt_required  # ri-usa il decorator già definito
 
 photos_bp = Blueprint("photos", __name__, url_prefix="")
+
 
 def _fs():
     """Restituisce un handle GridFS (collezione 'photos_fs')."""
     db = current_app.config["DB"]
-    # un solo oggetto; gridfs.GridFS è leggero, possiamo ricrearlo a richiesta
+    # GridFS è leggero: possiamo creare un'istanza per request
     return gridfs.GridFS(db, collection="photos_fs")
 
 
@@ -37,7 +40,7 @@ def upload_photos(marker_id):
     if not files:
         return jsonify({"message": "no files provided"}), 400
 
-    fs  = _fs()
+    fs = _fs()
     ids = []
 
     for f in files:
@@ -48,13 +51,13 @@ def upload_photos(marker_id):
         f.seek(0)
 
         _id = fs.put(
-            f,                              # file-like object
+            f,  # file-like object
             filename=f.filename,
             content_type=f.mimetype,
             metadata={
-                "username":  request.username,
+                "username": request.username,
                 "marker_id": marker_id,
-                "created_at": dt.datetime.utcnow(),
+                "created_at": dt.datetime.now(dt.timezone.utc),  # ▶︎ timezone-aware
             },
         )
         ids.append(_id)
@@ -65,7 +68,7 @@ def upload_photos(marker_id):
         {"_id": ObjectId(marker_id), "username": request.username},
         {
             "$addToSet": {"photoIds": {"$each": ids}},
-            "$set":      {"updated_at": dt.datetime.utcnow()},
+            "$set": {"updated_at": dt.datetime.now(dt.timezone.utc)},
         },
     )
 
@@ -76,13 +79,25 @@ def upload_photos(marker_id):
 # DOWNLOAD (stream) di una immagine
 # ────────────────────────────────────────────────────────────────
 @photos_bp.get("/photos/<photo_id>")
-@jwt_required      
+@jwt_required
 def get_photo(photo_id):
     fs = _fs()
+
+    # ▶︎ 1.3  — validazione ObjectId
     try:
-        grid_file = fs.get(ObjectId(photo_id))
+        oid = ObjectId(photo_id)
+    except (InvalidId, TypeError):
+        return jsonify({"message": "invalid id"}), 400
+
+    try:
+        grid_file = fs.get(oid)
     except gridfs.NoFile:
         return jsonify({"message": "photo not found"}), 404
+
+    # ▶︎ 1.4  — verifica ownership
+    meta = grid_file.metadata or {}
+    if meta.get("username") != request.username:
+        return jsonify({"message": "forbidden"}), 403
 
     return send_file(
         io.BytesIO(grid_file.read()),

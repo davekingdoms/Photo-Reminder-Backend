@@ -20,13 +20,13 @@ def _fs():
     return gridfs.GridFS(current_app.config["DB"], collection="photos_fs")
 
 # ───────────────────────────────────────────────────────────
-# TTL index (soft-delete 15 giorni)
+# TTL index (soft-delete)
 # ───────────────────────────────────────────────────────────
 def ensure_ttl_index():
     _markers().create_index(
         [("deleted_at", ASCENDING)],
-        name="deleted_ttl_15days",
-        expireAfterSeconds=60 * 60 * 24 * 15,
+        name="deleted_ttl_1days",
+        expireAfterSeconds=60 * 60 * 24,
         partialFilterExpression={"deleted": True},
     )
 
@@ -148,14 +148,11 @@ def create_marker():
 @jwt_required
 def update_marker(marker_id):
     data = request.get_json(silent=True) or {}
+
+    # ⬇️ nuova riga: rimuove _id se presente, per evitare l'errore 66
+    data.pop("_id", None)
+
     now = dt.datetime.now(dt.timezone.utc)
-
-    if "angle" in data:
-        try:
-            data["angle"] = float(data["angle"])
-        except (ValueError, TypeError):
-            return jsonify({"message": "angle must be a number"}), 400
-
     data["updated_at"] = now
 
     res = _markers().find_one_and_update(
@@ -166,6 +163,7 @@ def update_marker(marker_id):
     if not res:
         return jsonify({"message": "marker not found"}), 404
     return jsonify({"marker": _to_client(res)}), 200
+
 
 
 @markers_bp.delete("/<marker_id>", strict_slashes=False)

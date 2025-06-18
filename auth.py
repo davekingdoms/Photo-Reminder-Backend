@@ -1,8 +1,11 @@
 #auth.py
 import datetime, bcrypt, jwt
 from flask import Blueprint, request, jsonify, current_app
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 auth_bp = Blueprint("auth", __name__)
+limiter = Limiter(key_func=get_remote_address)
 
 def _users():
     """Restituisce la collection MongoDB degli utenti"""
@@ -45,6 +48,8 @@ def register():
             "username":   username,
             "password":   hashed_pw,
             "created_at": datetime.datetime.now(datetime.timezone.utc),
+            "failed_attempts": 0,
+            "lockout_until":   None,
         }
     )
 
@@ -57,6 +62,7 @@ def register():
 
 
 @auth_bp.post("/login")
+@limiter.limit("5 per minute")
 def login():
     data = request.get_json(silent=True) or {}
     username = data.get("username")
@@ -64,10 +70,41 @@ def login():
 
     if not username or not password:
         return jsonify({"message": "Username and password are required"}), 400
-
+    
+    now = datetime.datetime.now(datetime.timezone.utc)
     user = _users().find_one({"username": username})
-    if not user or not bcrypt.checkpw(password.encode(), user["password"]):
+    if not user:
         return jsonify({"message": "Invalid username or password"}), 401
+    
+    lockout_until = user.get("lockout_until")
+    if lockout_until and lockout_until > now:
+        remaining = int((lockout_until - now).total_seconds() / 60)
+        return jsonify({
+            "message": f"Account temporarily locked. Try again in {remaining} minutes."
+        }), 429
+
+    # Controllo password
+    if not bcrypt.checkpw(password.encode(), user["password"]):
+        # incrementa i tentativi falliti
+        attempts = user.get("failed_attempts", 0) + 1
+        update = {"failed_attempts": attempts}
+
+        # dopo 5 tentativi, blocca per 15 minuti
+        if attempts >= 5:
+            update["lockout_until"] = now + datetime.timedelta(minutes=15)
+            update["failed_attempts"] = 0
+
+        _users().update_one(
+            {"_id": user["_id"]},
+            {"$set": update}
+        )
+        return jsonify({"message": "Invalid username or password"}), 401
+
+    # Login riuscito: resetta contatori e genera token
+    _users().update_one(
+        {"_id": user["_id"]},
+        {"$set": {"failed_attempts": 0, "lockout_until": None}}
+    )
 
     return jsonify(
         {

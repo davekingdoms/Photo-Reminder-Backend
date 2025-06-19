@@ -34,45 +34,69 @@ def upload_photos(marker_id):
     """
     • accetta N file multipart con name="files"
     • salva ogni immagine in GridFS
-    • fa push degli _id nel campo photoIds del marker
+    • aggiorna photoIds nel marker
+    • restituisce lista {filename,_id}
     """
+    # ---------- 1. validazione id & ownership ----------
+    try:
+        oid = ObjectId(marker_id)
+    except (InvalidId, TypeError):
+        return jsonify({"message": "invalid id"}), 400
+
+    coll = current_app.config["MARKERS_COLL"]
+    marker = coll.find_one(
+        {"_id": oid, "username": request.username, "deleted": {"$ne": True}}
+    )
+    if not marker:
+        return jsonify({"message": "marker not found"}), 404
+
+    # ---------- 2. payload ----------
     files = request.files.getlist("files")
     if not files:
         return jsonify({"message": "no files provided"}), 400
 
-    fs = _fs()
-    ids = []
-
+    fs, pairs = _fs(), []          # [(ObjectId, filename)]
     for f in files:
-        # extra check: max 25 MB per file
         f.seek(0, io.SEEK_END)
         if f.tell() > 25 * 1024 * 1024:
             return jsonify({"message": f"{f.filename} too large"}), 400
         f.seek(0)
 
         _id = fs.put(
-            f,  # file-like object
+            f,
             filename=f.filename,
             content_type=f.mimetype,
             metadata={
                 "username": request.username,
-                "marker_id": marker_id,
-                "created_at": dt.datetime.now(dt.timezone.utc),  # ▶︎ timezone-aware
+                "marker_id": str(oid),
+                "created_at": dt.datetime.now(dt.timezone.utc),
             },
         )
-        ids.append(_id)
+        pairs.append((_id, f.filename))
 
-    # aggiunge gli id al marker (array unico, evita duplicati)
-    coll = current_app.config["MARKERS_COLL"]
-    coll.update_one(
-        {"_id": ObjectId(marker_id), "username": request.username},
+    # ---------- 3. update marker ----------
+    res = coll.update_one(
+        {"_id": oid, "username": request.username},
         {
-            "$addToSet": {"photoIds": {"$each": ids}},
+            "$addToSet": {"photoIds": {"$each": [pid for pid, _ in pairs]}},
             "$set": {"updated_at": dt.datetime.now(dt.timezone.utc)},
         },
     )
+    if res.matched_count == 0:             # race-condition: rollback
+        for pid, _ in pairs:
+            try:
+                fs.delete(pid)
+            except gridfs.NoFile:
+                pass
+        return jsonify({"message": "marker update failed"}), 409
 
-    return jsonify({"photoIds": [str(x) for x in ids]}), 201
+    # ---------- 4. risposta stabile ----------
+    return jsonify({
+        "photos": [
+            {"filename": fname, "_id": str(pid)}
+            for pid, fname in pairs
+        ]
+    }), 201
 
 
 # ────────────────────────────────────────────────────────────────

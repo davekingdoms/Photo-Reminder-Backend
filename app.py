@@ -1,12 +1,15 @@
 #app.py
 from flask import Flask
 from pymongo import MongoClient
+from datetime import timezone
 
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = "d6yw372%ylWK$u"          # use an env-var in prod
 
-client = MongoClient("mongodb://localhost:27017")
+client = MongoClient("mongodb://localhost:27017",
+    tz_aware=True,              
+    tzinfo=timezone.utc)
 db = client["photo_reminder"]
 
 app.config["USERS_COLL"] = db["users"]

@@ -11,30 +11,23 @@ from pymongo import ASCENDING, ReturnDocument
 
 markers_bp = Blueprint("markers", __name__)
 
-# ───────────────────────────────────────────────────────────
-# Helpers Mongo / GridFS
-# ───────────────────────────────────────────────────────────
 
 def _markers():
     return current_app.config["MARKERS_COLL"]
 
 
 def _fs():
-    """Handle GridFS (collezione photos_fs)."""
+
     return gridfs.GridFS(current_app.config["DB"], collection="photos_fs")
 
 
 def _parse_oid(value: str | None):
-    """Converte una stringa in ObjectId; restituisce None se non valida."""
+ 
     try:
         return ObjectId(value) if value else None
     except (InvalidId, TypeError):
         return None
 
-
-# ───────────────────────────────────────────────────────────
-# TTL index (soft-delete)
-# ───────────────────────────────────────────────────────────
 
 def ensure_ttl_index():
     _markers().create_index(
@@ -44,10 +37,6 @@ def ensure_ttl_index():
         partialFilterExpression={"deleted": True},
     )
 
-
-# ───────────────────────────────────────────────────────────
-# JWT decorator (ri-usato anche da photos.py)
-# ───────────────────────────────────────────────────────────
 
 def jwt_required(fn):
     @wraps(fn)
@@ -74,16 +63,12 @@ def jwt_required(fn):
     return wrapper
 
 
-# ───────────────────────────────────────────────────────────
-# Utils mapping
-# ───────────────────────────────────────────────────────────
-
 def _millis(value):
     return int(value.timestamp() * 1000) if isinstance(value, dt.datetime) else 0
 
 
 def _to_client(doc: dict) -> dict:
-    """Trasforma documento Mongo → payload per l’app mobile."""
+
     return {
         "_id": str(doc["_id"]),
         "username": doc["username"],
@@ -98,17 +83,12 @@ def _to_client(doc: dict) -> dict:
         "tag": doc.get("tag"),
         "notes": doc.get("notes"),
         "photoIds": [str(pid) for pid in doc.get("photoIds", [])],
-        # ▸ angle può essere None se mai impostato: uso or 0.0 per fallback sicuro
         "angle": float(doc.get("angle") or 0.0),
         "createdAt": _millis(doc.get("created_at")),
         "updatedAt": _millis(doc.get("updated_at")),
         "deleted": doc.get("deleted", False),
     }
 
-
-# ───────────────────────────────────────────────────────────
-# Routes
-# ───────────────────────────────────────────────────────────
 
 
 @markers_bp.get("/", strict_slashes=False)
@@ -143,7 +123,6 @@ def create_marker():
     except (ValueError, TypeError):
         return jsonify({"message": "lat/lng must be numbers"}), 400
 
-    # ▸ optional custom id dal client
     custom_id = _parse_oid(data.get("id"))
     if data.get("id") and custom_id is None:
         return jsonify({"message": "invalid id"}), 400
@@ -176,7 +155,7 @@ def create_marker():
 @jwt_required
 def update_marker(marker_id):
     data = request.get_json(silent=True) or {}
-    data.pop("_id", None)  # evita l'errore 66
+    data.pop("_id", None)  
 
     oid = _parse_oid(marker_id)
     if oid is None:
@@ -217,7 +196,6 @@ def delete_marker(marker_id):
     if not res:
         return jsonify({"message": "marker not found"}), 404
 
-    # ── elimina in cascata le immagini collegate (se presenti) ──
     if res.get("photoIds"):
         fs = _fs()
         for pid in res["photoIds"]:

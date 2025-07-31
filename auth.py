@@ -8,17 +8,13 @@ auth_bp = Blueprint("auth", __name__)
 limiter = Limiter(key_func=get_remote_address)
 
 
-# ───────────────────────────────────────────────────────────
-# Helpers
-# ───────────────────────────────────────────────────────────
-
 def _users():
-    """Restituisce la collection MongoDB degli utenti"""
+  
     return current_app.config["USERS_COLL"]
 
 
 def _jwt_for(username: str) -> str:
-    """Genera e restituisce un JWT HS256 valido 30 giorni."""
+
     token = jwt.encode(
         {
             "sub": username,
@@ -28,13 +24,9 @@ def _jwt_for(username: str) -> str:
         current_app.config["SECRET_KEY"],
         algorithm="HS256",
     )
-    # jwt.encode in PyJWT >= 2.x restituisce str, in 1.x bytes → normalizzo
+
     return token if isinstance(token, str) else token.decode("utf-8")
 
-
-# ───────────────────────────────────────────────────────────
-# Routes
-# ───────────────────────────────────────────────────────────
 
 
 @auth_bp.post("/register")
@@ -52,7 +44,7 @@ def register():
     _users().insert_one(
         {
             "username": username,
-            "password": hashed_pw,  # salvato come BSON Binary
+            "password": hashed_pw, 
             "created_at": datetime.datetime.now(datetime.timezone.utc),
             "failed_attempts": 0,
             "lockout_until": None,
@@ -88,16 +80,13 @@ def login():
             429,
         )
 
-    # -----------------------------------------------------------
-    # SAFE PASSWORD CHECK (fix 1.5): cast BSON Binary → bytes
-    # -----------------------------------------------------------
-    stored_pw = bytes(user["password"])  # rimuove il wrapper Binary
+    stored_pw = bytes(user["password"])  
     if not bcrypt.checkpw(password.encode(), stored_pw):
-        # incrementa i tentativi falliti
+   
         attempts = user.get("failed_attempts", 0) + 1
         update = {"failed_attempts": attempts}
 
-        # dopo 5 tentativi, blocca per 15 minuti
+     
         if attempts >= 5:
             update["lockout_until"] = now + datetime.timedelta(minutes=15)
             update["failed_attempts"] = 0
@@ -105,7 +94,6 @@ def login():
         _users().update_one({"_id": user["_id"]}, {"$set": update})
         return jsonify({"message": "Invalid username or password"}), 401
 
-    # Login riuscito: resetta contatori e genera token
     _users().update_one(
         {"_id": user["_id"]}, {"$set": {"failed_attempts": 0, "lockout_until": None}}
     )

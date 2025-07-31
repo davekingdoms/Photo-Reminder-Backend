@@ -1,10 +1,5 @@
 # photos.py
-"""
-Gestione upload / download immagini con GridFS.
 
-POST  /markers/<marker_id>/photos       (multipart)  →  { "photoIds": [...] }
-GET   /photos/<photo_id>                              →  stream immagine
-"""
 import datetime as dt
 import io
 
@@ -13,31 +8,22 @@ from bson import ObjectId
 from bson.errors import InvalidId
 from flask import Blueprint, current_app, request, send_file, jsonify
 
-from markers import jwt_required  # ri-usa il decorator già definito
+from markers import jwt_required 
 
 photos_bp = Blueprint("photos", __name__, url_prefix="")
 
 
 def _fs():
-    """Restituisce un handle GridFS (collezione 'photos_fs')."""
+   
     db = current_app.config["DB"]
-    # GridFS è leggero: possiamo creare un'istanza per request
+ 
     return gridfs.GridFS(db, collection="photos_fs")
 
-
-# ────────────────────────────────────────────────────────────────
-# UPLOAD di (una o più) immagini per un marker
-# ────────────────────────────────────────────────────────────────
 @photos_bp.post("/markers/<marker_id>/photos")
 @jwt_required
 def upload_photos(marker_id):
-    """
-    • accetta N file multipart con name="files"
-    • salva ogni immagine in GridFS
-    • aggiorna photoIds nel marker
-    • restituisce lista {filename,_id}
-    """
-    # ---------- 1. validazione id & ownership ----------
+   
+
     try:
         oid = ObjectId(marker_id)
     except (InvalidId, TypeError):
@@ -50,7 +36,7 @@ def upload_photos(marker_id):
     if not marker:
         return jsonify({"message": "marker not found"}), 404
 
-    # ---------- 2. payload ----------
+  
     files = request.files.getlist("files")
     if not files:
         return jsonify({"message": "no files provided"}), 400
@@ -74,7 +60,6 @@ def upload_photos(marker_id):
         )
         pairs.append((_id, f.filename))
 
-    # ---------- 3. update marker ----------
     res = coll.update_one(
         {"_id": oid, "username": request.username},
         {
@@ -82,7 +67,7 @@ def upload_photos(marker_id):
             "$set": {"updated_at": dt.datetime.now(dt.timezone.utc)},
         },
     )
-    if res.matched_count == 0:             # race-condition: rollback
+    if res.matched_count == 0:          
         for pid, _ in pairs:
             try:
                 fs.delete(pid)
@@ -90,7 +75,6 @@ def upload_photos(marker_id):
                 pass
         return jsonify({"message": "marker update failed"}), 409
 
-    # ---------- 4. risposta stabile ----------
     return jsonify({
         "photos": [
             {"filename": fname, "_id": str(pid)}
@@ -99,15 +83,12 @@ def upload_photos(marker_id):
     }), 201
 
 
-# ────────────────────────────────────────────────────────────────
-# DOWNLOAD (stream) di una immagine
-# ────────────────────────────────────────────────────────────────
+
 @photos_bp.get("/photos/<photo_id>")
 @jwt_required
 def get_photo(photo_id):
     fs = _fs()
 
-    # ▶︎ 1.3  — validazione ObjectId
     try:
         oid = ObjectId(photo_id)
     except (InvalidId, TypeError):
@@ -118,7 +99,6 @@ def get_photo(photo_id):
     except gridfs.NoFile:
         return jsonify({"message": "photo not found"}), 404
 
-    # ▶︎ 1.4  — verifica ownership
     meta = grid_file.metadata or {}
     if meta.get("username") != request.username:
         return jsonify({"message": "forbidden"}), 403
